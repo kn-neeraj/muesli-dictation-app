@@ -1070,6 +1070,10 @@ final class MuesliController: NSObject {
         indicator.refreshMeetingTranscriptPreference(config: config)
     }
 
+    func refreshOrbTheme() {
+        indicator.refreshOrbTheme()
+    }
+
     func refreshUI() {
         statusBarController?.setStatus("Idle")
         statusBarController?.refresh()
