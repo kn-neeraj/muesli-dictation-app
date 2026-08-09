@@ -24,7 +24,7 @@ enum VoiceOrbMotion {
     static func scales(for level: CGFloat) -> (core: CGFloat, corona: CGFloat) {
         let clamped = max(0, min(1, level))
         let shaped = CGFloat(pow(Double(clamped), 0.72))
-        return (core: 1 + shaped * 0.12, corona: 0.96 + shaped * 0.18)
+        return (core: 1 + shaped * 0.25, corona: 0.96 + shaped * 0.30)  // Bigger expansion
     }
 }
 
@@ -174,6 +174,8 @@ final class FloatingIndicatorController: NSObject {
     // MARK: - Voice Orb (standard dictation)
     private var orbCoronaLayer: CALayer?
     private var orbCoreLayer: CAGradientLayer?
+    private var orbHighlightLayer: CAGradientLayer?
+    private var orbBorderLayer: CAShapeLayer?
     private var orbBaseColor: NSColor = .white
     private var orbBrightColor: NSColor = .white
     private var dictationOrbPresentation: DictationOrbPresentation = .normal
@@ -714,6 +716,21 @@ final class FloatingIndicatorController: NSObject {
         micIconView?.image = newImage
     }
 
+    /// Refresh the orb theme colors when mood changes in settings.
+    func refreshOrbTheme() {
+        // Clear cached colors so fresh colors are loaded next time
+        orbBaseColor = .white
+        orbBrightColor = .white
+
+        // If orb is currently visible, recreate it immediately with new colors and re-apply current state
+        if let contentView, orbCoreLayer != nil {
+            let currentPresentation = dictationOrbPresentation
+            removeOrbLayers()
+            ensureOrbAnimation(in: contentView.frame.size, presentation: currentPresentation)
+        }
+        // If not visible, colors will be loaded fresh when orb appears next time via orbColorPair()
+    }
+
     /// Flash a brief warning message on the indicator pill, then snap back to idle.
     func showWarning(_ message: String, icon: String = "⚡", duration: TimeInterval = 2.5) {
         guard state == .idle else { return }
@@ -1156,7 +1173,17 @@ final class FloatingIndicatorController: NSObject {
     /// A fixed blue gradient gives every standard-dictation phase one continuous,
     /// OpenAI-inspired visual identity without inheriting a recording accent.
     private func orbColorPair() -> (baseHex: String, brightHex: String) {
-        (baseHex: "6679D4", brightHex: "D7DFFF")
+        let config = configStore.load()
+        let moodRawValue = config.orbMood
+        var mood = OrbMood(rawValue: moodRawValue) ?? OrbMood.defaultMood
+
+        // Resolve "I'm Feeling Lucky" to a random mood
+        if mood == .feelingLucky {
+            mood = OrbMood.allMoodsExceptLucky.randomElement() ?? OrbMood.defaultMood
+        }
+
+        let theme = mood.theme
+        return (baseHex: theme.baseColor, brightHex: theme.brightColor)
     }
 
     private func ensureOrbAnimation(
@@ -1235,15 +1262,17 @@ final class FloatingIndicatorController: NSObject {
         orbBaseColor = baseColor
         orbBrightColor = brightColor
 
-        let coreDiameter: CGFloat = 32
-        let coronaDiameter: CGFloat = 46
+        let coreDiameter: CGFloat = 48  // Larger for more prominence
+        let coronaDiameter: CGFloat = 64  // Larger glow
+
+        // Corona (pure glow, no background)
         let corona = CALayer()
         corona.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         corona.cornerRadius = coronaDiameter / 2
-        corona.backgroundColor = baseColor.withAlphaComponent(0.14).cgColor
+        corona.backgroundColor = nil  // NO background - just glow
         corona.shadowColor = brightColor.cgColor
-        corona.shadowRadius = 8
-        corona.shadowOpacity = 0.16
+        corona.shadowRadius = 16  // Stronger glow
+        corona.shadowOpacity = 0.35  // More visible glow
         corona.shadowOffset = .zero
         corona.frame = CGRect(
             x: center.x - coronaDiameter / 2,
@@ -1257,16 +1286,20 @@ final class FloatingIndicatorController: NSObject {
         layer.addSublayer(corona)
         orbCoronaLayer = corona
 
+        // Core: Simplified sphere gradient (centered radial, bright → dark)
         let core = CAGradientLayer()
         core.type = .radial
-        core.startPoint = CGPoint(x: 0.5, y: 0.5)
-        core.endPoint = CGPoint(x: 1.0, y: 0.0)
+        core.startPoint = CGPoint(x: 0.5, y: 0.5)  // Centered
+        core.endPoint = CGPoint(x: 1.0, y: 1.0)    // Edge
+
+        // Simple 4-stop gradient for performance
         core.colors = [
-            brightColor.withAlphaComponent(0.9).cgColor,
-            baseColor.cgColor,
-            baseColor.withAlphaComponent(0.9).cgColor
+            brightColor.withAlphaComponent(1.0).cgColor,    // Bright center
+            brightColor.withAlphaComponent(0.85).cgColor,   // Mid-bright
+            baseColor.withAlphaComponent(0.60).cgColor,     // Mid-dark
+            baseColor.withAlphaComponent(0.25).cgColor      // Dark edge
         ]
-        core.locations = [0, 0.58, 1]
+        core.locations = [0, 0.3, 0.7, 1.0]
         core.frame = CGRect(
             x: center.x - coreDiameter / 2,
             y: center.y - coreDiameter / 2,
@@ -1279,14 +1312,68 @@ final class FloatingIndicatorController: NSObject {
         core.masksToBounds = true
         layer.addSublayer(core)
         orbCoreLayer = core
+
+        // Highlight: Simple bright spot at top
+        let highlightSize: CGFloat = coreDiameter * 0.45
+        let highlight = CAGradientLayer()
+        highlight.type = .radial
+        highlight.startPoint = CGPoint(x: 0.5, y: 0.5)
+        highlight.endPoint = CGPoint(x: 1.0, y: 1.0)
+
+        // Simple 3-stop white highlight
+        highlight.colors = [
+            NSColor.white.withAlphaComponent(0.80).cgColor,   // Bright center
+            NSColor.white.withAlphaComponent(0.30).cgColor,   // Fade
+            NSColor.white.withAlphaComponent(0).cgColor       // Transparent
+        ]
+        highlight.locations = [0, 0.5, 1.0]
+
+        // Position highlight at top-center
+        let highlightOffsetX: CGFloat = 0
+        let highlightOffsetY: CGFloat = -coreDiameter * 0.15
+        highlight.frame = CGRect(
+            x: center.x - highlightSize / 2 + highlightOffsetX,
+            y: center.y - highlightSize / 2 + highlightOffsetY,
+            width: highlightSize,
+            height: highlightSize
+        )
+        highlight.cornerRadius = highlightSize / 2
+        highlight.masksToBounds = true
+        layer.addSublayer(highlight)
+        orbHighlightLayer = highlight
+
+        // Border: appears when listening/speaking
+        let border = CAShapeLayer()
+        border.path = CGPath(ellipseIn: CGRect(
+            x: center.x - coreDiameter / 2,
+            y: center.y - coreDiameter / 2,
+            width: coreDiameter,
+            height: coreDiameter
+        ), transform: nil)
+        border.fillColor = nil
+        border.strokeColor = brightColor.cgColor
+        border.lineWidth = 2.0
+        border.opacity = 0  // Hidden by default
+        layer.addSublayer(border)
+        orbBorderLayer = border
+
+        // Add subtle depth shadow to core
+        core.shadowColor = NSColor.black.cgColor
+        core.shadowRadius = 4
+        core.shadowOpacity = 0.3
+        core.shadowOffset = CGSize(width: 0, height: 1)
     }
 
     private func layoutOrb(in frameSize: NSSize) {
         let center = CGPoint(x: frameSize.width / 2, y: frameSize.height / 2)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let coreDiameter: CGFloat = 32
-        let coronaDiameter: CGFloat = 46
+        let coreDiameter: CGFloat = 48
+        let coronaDiameter: CGFloat = 64
+        let highlightSize: CGFloat = coreDiameter * 0.45
+        let highlightOffsetX: CGFloat = 0
+        let highlightOffsetY: CGFloat = -coreDiameter * 0.15
+
         orbCoronaLayer?.frame = CGRect(
             x: center.x - coronaDiameter / 2,
             y: center.y - coronaDiameter / 2,
@@ -1295,6 +1382,7 @@ final class FloatingIndicatorController: NSObject {
         )
         orbCoronaLayer?.cornerRadius = coronaDiameter / 2
         orbCoronaLayer?.position = center
+
         orbCoreLayer?.frame = CGRect(
             x: center.x - coreDiameter / 2,
             y: center.y - coreDiameter / 2,
@@ -1303,6 +1391,22 @@ final class FloatingIndicatorController: NSObject {
         )
         orbCoreLayer?.cornerRadius = coreDiameter / 2
         orbCoreLayer?.position = center
+
+        orbHighlightLayer?.frame = CGRect(
+            x: center.x - highlightSize / 2 + highlightOffsetX,
+            y: center.y - highlightSize / 2 + highlightOffsetY,
+            width: highlightSize,
+            height: highlightSize
+        )
+        orbHighlightLayer?.cornerRadius = highlightSize / 2
+
+        orbBorderLayer?.path = CGPath(ellipseIn: CGRect(
+            x: center.x - coreDiameter / 2,
+            y: center.y - coreDiameter / 2,
+            width: coreDiameter,
+            height: coreDiameter
+        ), transform: nil)
+
         CATransaction.commit()
     }
 
@@ -1312,26 +1416,41 @@ final class FloatingIndicatorController: NSObject {
 
         let baseColor = orbBaseColor
         let brightColor = orbBrightColor
-        let highlight = blend(baseColor, brightColor, t: 0.5 + shaped * 0.1)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+
+        // Corona: scale + glow
         orbCoronaLayer?.transform = CATransform3DMakeScale(motion.corona, motion.corona, 1)
-        orbCoronaLayer?.shadowOpacity = Float(0.16 + shaped * 0.16)
+        orbCoronaLayer?.shadowOpacity = Float(0.35 + shaped * 0.20)
+
+        // Core: scale only, keep colors consistent
         orbCoreLayer?.transform = CATransform3DMakeScale(motion.core, motion.core, 1)
-        orbCoreLayer?.colors = [
-            highlight.cgColor,
-            baseColor.cgColor,
-            baseColor.withAlphaComponent(0.9).cgColor
+
+        // Highlight: scale + subtle brightness boost
+        orbHighlightLayer?.transform = CATransform3DMakeScale(motion.core, motion.core, 1)
+        let highlightBoost = 0.80 + shaped * 0.15
+        orbHighlightLayer?.colors = [
+            NSColor.white.withAlphaComponent(highlightBoost).cgColor,
+            NSColor.white.withAlphaComponent(0.30).cgColor,
+            NSColor.white.withAlphaComponent(0).cgColor
         ]
+
+        // Border: fades in when speaking (smooth fade)
+        orbBorderLayer?.opacity = Float(shaped * 0.6)  // Max 0.6 opacity when speaking
+
         CATransaction.commit()
     }
 
     private func removeOrbLayers() {
         orbCoronaLayer?.removeFromSuperlayer()
         orbCoreLayer?.removeFromSuperlayer()
+        orbHighlightLayer?.removeFromSuperlayer()
+        orbBorderLayer?.removeFromSuperlayer()
         orbCoronaLayer = nil
         orbCoreLayer = nil
+        orbHighlightLayer = nil
+        orbBorderLayer = nil
     }
 
     private func blend(_ a: NSColor, _ b: NSColor, t: CGFloat) -> NSColor {

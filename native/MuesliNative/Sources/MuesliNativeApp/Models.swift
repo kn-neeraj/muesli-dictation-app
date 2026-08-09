@@ -15,7 +15,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/parakeet-tdt-0.6b-v3-coreml",
         label: "Parakeet v3",
         sizeLabel: "~450 MB",
-        description: "Multilingual, 25 languages. Runs on Apple Neural Engine.",
+        description: "Fast everyday transcription with an excellent balance of speed and accuracy. Supports 25 languages.",
         recommended: true
     )
 
@@ -24,7 +24,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
         label: "Parakeet v2",
         sizeLabel: "~450 MB",
-        description: "English-only, highest recall. Runs on Apple Neural Engine.",
+        description: "Fast English transcription with a strong balance of speed and accuracy.",
         recommended: false
     )
 
@@ -78,7 +78,7 @@ struct BackendOption: Equatable {
         model: "phequals/cohere-transcribe-coreml-mixed-precision",
         label: "Cohere Transcribe",
         sizeLabel: "~3.8 GB",
-        description: "Mixed precision (FP16 encoder + INT8 decoder). 14 languages. High accuracy (#1 Open ASR Leaderboard). Final transcript after stop. May decode hallucinated text during silence — use in quiet environments or with VAD.",
+        description: "Best accuracy for difficult audio and accents. Choose it when getting every word right matters more than speed. It is larger and slower than Parakeet, supports 14 languages, and gives you the final transcript when you stop. Works best in a quiet environment.",
         recommended: false
     )
 
@@ -228,9 +228,7 @@ struct BackendOption: Equatable {
             return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
                 || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
         case "nemotron35":
-            let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
-            return fm.fileExists(atPath: path.path)
+            return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
         case "cohere":
             return CohereTranscribeModelStore.isAvailableLocally()
         case "indicasr":
@@ -740,50 +738,6 @@ enum TranscriptCleanupPrompts {
     }
 }
 
-struct CustomWord: Codable, Equatable, Identifiable {
-    var id = UUID()
-    var word: String
-    var replacement: String?
-    var matchingThreshold: Double = 0.85
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case word
-        case replacement
-        case matchingThreshold = "matching_threshold"
-    }
-
-    init(id: UUID = UUID(), word: String, replacement: String?, matchingThreshold: Double = 0.85) {
-        self.id = id
-        self.word = word
-        self.replacement = replacement
-        self.matchingThreshold = Self.clampedThreshold(matchingThreshold)
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
-        word = try c.decode(String.self, forKey: .word)
-        replacement = try c.decodeIfPresent(String.self, forKey: .replacement)
-        matchingThreshold = Self.clampedThreshold(try c.decodeIfPresent(Double.self, forKey: .matchingThreshold) ?? 0.85)
-    }
-
-    var displayLabel: String {
-        if let replacement, !replacement.isEmpty {
-            return "\(word) → \(replacement)"
-        }
-        return word
-    }
-
-    var targetWord: String {
-        replacement ?? word
-    }
-
-    private static func clampedThreshold(_ value: Double) -> Double {
-        min(max(value, 0.70), 0.95)
-    }
-}
-
 struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var observed: String
@@ -1037,6 +991,110 @@ enum OnboardingUseCase: String, Codable, CaseIterable {
     }
 }
 
+enum OrbMood: String, CaseIterable, Codable {
+    case feelingLow = "feeling_low"
+    case tiredSleepy = "tired_sleepy"
+    case feelingHot = "feeling_hot"
+    case feelingCold = "feeling_cold"
+    case stressed = "stressed"
+    case angryIrritated = "angry_irritated"
+    case lonely = "lonely"
+    case feelingGood = "feeling_good"
+    case cheeky = "cheeky"
+    case excited = "excited"
+    case relax = "relax"
+    case needToFocus = "need_to_focus"
+    case feelingLucky = "feeling_lucky"
+
+    var displayName: String {
+        switch self {
+        case .feelingLow: return "Feeling Low"
+        case .tiredSleepy: return "Tired/Sleepy"
+        case .feelingHot: return "Feeling Hot"
+        case .feelingCold: return "Feeling Cold"
+        case .stressed: return "Stressed"
+        case .angryIrritated: return "Angry/Irritated"
+        case .lonely: return "Lonely"
+        case .feelingGood: return "Feeling Good"
+        case .cheeky: return "Cheeky"
+        case .excited: return "Excited"
+        case .relax: return "Relax"
+        case .needToFocus: return "Need to Focus"
+        case .feelingLucky: return "I'm Feeling Lucky"
+        }
+    }
+
+    var tagline: String {
+        switch self {
+        case .feelingLow: return "Energize me"
+        case .tiredSleepy: return "Wake me up"
+        case .feelingHot: return "Cool me down"
+        case .feelingCold: return "Warm me up"
+        case .stressed: return "Calm me"
+        case .angryIrritated: return "Ground me"
+        case .lonely: return "Comfort me"
+        case .feelingGood: return "Maintain vibe"
+        case .cheeky: return "Surprise me"
+        case .excited: return "Amplify it"
+        case .relax: return "Wind down"
+        case .needToFocus: return "Help me focus"
+        case .feelingLucky: return "Random mood"
+        }
+    }
+
+    var theme: OrbTheme {
+        switch self {
+        case .feelingLow:
+            return OrbTheme(baseColor: "F8B4B4", brightColor: "FDE8E8")
+        case .tiredSleepy:
+            return OrbTheme(baseColor: "FDBA74", brightColor: "FED7AA")
+        case .feelingHot:
+            return OrbTheme(baseColor: "7DD3FC", brightColor: "E0F2FE")
+        case .feelingCold:
+            return OrbTheme(baseColor: "FED7AA", brightColor: "FEF3C7")
+        case .stressed:
+            return OrbTheme(baseColor: "60A5FA", brightColor: "DBEAFE")
+        case .angryIrritated:
+            return OrbTheme(baseColor: "6EE7B7", brightColor: "D1FAE5")
+        case .lonely:
+            return OrbTheme(baseColor: "FECACA", brightColor: "FEE2E2")
+        case .feelingGood:
+            return OrbTheme(baseColor: "C4B5FD", brightColor: "EDE9FE")
+        case .cheeky:
+            return OrbTheme(baseColor: "22D3EE", brightColor: "ECFEFF", accentColor: "F0ABFC")
+        case .excited:
+            return OrbTheme(baseColor: "FCD34D", brightColor: "FEF3C7")
+        case .relax:
+            return OrbTheme(baseColor: "A5B4FC", brightColor: "E0E7FF")
+        case .needToFocus:
+            return OrbTheme(baseColor: "94A3B8", brightColor: "E2E8F0")
+        case .feelingLucky:
+            // Random mood - theme will be resolved at runtime
+            return OrbTheme(baseColor: "60A5FA", brightColor: "DBEAFE")
+        }
+    }
+
+    static var allMoodsExceptLucky: [OrbMood] {
+        allCases.filter { $0 != .feelingLucky }
+    }
+
+    static var defaultMood: OrbMood {
+        .stressed
+    }
+}
+
+struct OrbTheme {
+    let baseColor: String  // Hex without #
+    let brightColor: String  // Hex without #
+    let accentColor: String?  // Optional for gradient moods like "cheeky"
+
+    init(baseColor: String, brightColor: String, accentColor: String? = nil) {
+        self.baseColor = baseColor
+        self.brightColor = brightColor
+        self.accentColor = accentColor
+    }
+}
+
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
     var computerUseHotkey: HotkeyConfig = .computerUseDefault
@@ -1115,6 +1173,7 @@ struct AppConfig: Codable {
     var pauseMediaDuringDictation: Bool = false
     var muteSystemAudioDuringDictation: Bool = false
     var recordingColorHex: String = "1e1e2e"   // Catppuccin Mocha base, without #
+    var orbMood: String = OrbMood.defaultMood.rawValue
     var menuBarIcon: String = "muesli"
     var showNextMeetingInMenuBar: Bool = true
     var maraudersMapUnlocked: Bool = false
@@ -1236,6 +1295,7 @@ struct AppConfig: Codable {
         case pauseMediaDuringDictation = "pause_media_during_dictation"
         case muteSystemAudioDuringDictation = "mute_system_audio_during_dictation"
         case recordingColorHex = "recording_color_hex"
+        case orbMood = "orb_mood"
         case menuBarIcon = "menu_bar_icon"
         case showNextMeetingInMenuBar = "show_next_meeting_in_menu_bar"
         case maraudersMapUnlocked = "marauders_map_unlocked"
@@ -1409,6 +1469,7 @@ struct AppConfig: Codable {
         pauseMediaDuringDictation = (try? c.decode(Bool.self, forKey: .pauseMediaDuringDictation)) ?? defaults.pauseMediaDuringDictation
         muteSystemAudioDuringDictation = (try? c.decode(Bool.self, forKey: .muteSystemAudioDuringDictation)) ?? defaults.muteSystemAudioDuringDictation
         recordingColorHex = (try? c.decode(String.self, forKey: .recordingColorHex)) ?? defaults.recordingColorHex
+        orbMood = (try? c.decode(String.self, forKey: .orbMood)) ?? defaults.orbMood
         menuBarIcon = (try? c.decode(String.self, forKey: .menuBarIcon)) ?? defaults.menuBarIcon
         showNextMeetingInMenuBar = (try? c.decode(Bool.self, forKey: .showNextMeetingInMenuBar)) ?? defaults.showNextMeetingInMenuBar
         maraudersMapUnlocked = (try? c.decode(Bool.self, forKey: .maraudersMapUnlocked)) ?? defaults.maraudersMapUnlocked

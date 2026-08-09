@@ -19,6 +19,7 @@ case "${shard}" in
     filters=(
       ConfigStoreTests
       DictationStoreTests
+      MuesliCKSyncEngineTests
       MuesliCLITests
       ChatGPTAuthTests
       ChatGPTTokenStorageTests
@@ -30,6 +31,9 @@ case "${shard}" in
       CGPointCodableTests
       UpdateFailureGuidanceTests
       WordCountTests
+      CustomWordDictionaryTests
+      ModelDownloadCoordinatorTests
+      IndicASRBackendTests
     )
     ;;
   dictation-transcription)
@@ -63,6 +67,7 @@ case "${shard}" in
       HotkeyConfigTests
       DictationStateIdleTests
       DictationCorrectionMonitorTests
+      Nemotron35ModelStoreTests
     )
     ;;
   meetings)
