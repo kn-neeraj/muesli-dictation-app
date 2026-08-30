@@ -296,6 +296,20 @@ public actor ModelDownloadCoordinator {
         }
     }
 
+    /// Cancels active transfers for a model and waits until their file writes
+    /// have fully unwound. Use this before deleting a model destination.
+    public func cancelAndWait(modelID: String) async {
+        let tasks = inFlight.compactMap { key, task in
+            key.modelID == modelID ? task : nil
+        }
+        for task in tasks {
+            task.cancel()
+        }
+        for task in tasks {
+            _ = try? await task.value
+        }
+    }
+
     /// Downloads, validates, and atomically installs every file in a manifest.
     ///
     /// Requests with the same model, canonical destination, and manifest contents
@@ -355,13 +369,23 @@ public actor ModelDownloadCoordinator {
             try validatedURL(for: file.relativePath, in: directory)
         }
         let destinationPath = canonicalDirectoryPath(directory)
-        guard !inFlight.keys.contains(where: { $0.destinationPath == destinationPath }) else { return }
+        guard !inFlight.keys.contains(where: { $0.destinationPath == destinationPath }) else {
+            throw ModelDownloadError.conflictingInFlightDownload(manifest.id)
+        }
         let fm = FileManager.default
         for path in paths {
-            try? fm.removeItem(at: path.appendingPathExtension("part"))
-            try? fm.removeItem(at: path)
+            let partialPath = path.appendingPathExtension("part")
+            if fm.fileExists(atPath: partialPath.path) {
+                try fm.removeItem(at: partialPath)
+            }
+            if fm.fileExists(atPath: path.path) {
+                try fm.removeItem(at: path)
+            }
         }
-        try? fm.removeItem(at: stateURL(for: directory))
+        let persistedStateURL = stateURL(for: directory)
+        if fm.fileExists(atPath: persistedStateURL.path) {
+            try fm.removeItem(at: persistedStateURL)
+        }
     }
 
     private func performDownload(

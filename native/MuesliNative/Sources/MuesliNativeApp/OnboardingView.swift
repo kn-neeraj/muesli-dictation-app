@@ -17,6 +17,10 @@ struct OnboardingView: View {
     @State private var isSigningInChatGPT = false
     @State private var chatGPTSignInDone = false
     @State private var chatGPTSignInError: String?
+    @State private var isSigningInOpenRouter = false
+    @State private var openRouterSignInDone = false
+    @State private var openRouterSignInError: String?
+    @State private var isEnteringOpenRouterAPIKey = false
 
     // Permission states — polled from OS every second
     @State private var micGranted = false
@@ -80,13 +84,17 @@ struct OnboardingView: View {
     }
 
     private var onboardingAlternativeModels: [BackendOption] {
-        var options = BackendOption.onboarding.filter { $0 != .parakeetMultilingual }
+        var options = BackendOption.onboarding.filter { $0 != BackendOption.onboardingDefault }
         if BackendOption.onboarding.contains(selectedBackend),
-           selectedBackend != .parakeetMultilingual,
+           selectedBackend != BackendOption.onboardingDefault,
            !options.contains(selectedBackend) {
             options.insert(selectedBackend, at: 0)
         }
         return options
+    }
+
+    private var onboardingModelDescription: String {
+        "Start with a fast local model. Larger models can download while you continue setup."
     }
 
     init(
@@ -94,7 +102,7 @@ struct OnboardingView: View {
         appState: AppState,
         initialStep: Int = 0,
         initialUserName: String = "",
-        initialBackend: BackendOption = .parakeetMultilingual,
+        initialBackend: BackendOption = BackendOption.onboardingDefault,
         initialCohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
         initialHotkey: HotkeyConfig = .default,
         initialSystemAudioRequested: Bool = false,
@@ -131,7 +139,9 @@ struct OnboardingView: View {
         _currentStep = State(initialValue: effectiveInitialStep)
         _userName = State(initialValue: initialUserName)
         _selectedUseCase = State(initialValue: initialUseCase)
-        let sanitizedInitialBackend = BackendOption.onboarding.contains(initialBackend) ? initialBackend : .parakeetMultilingual
+        let sanitizedInitialBackend = BackendOption.onboarding.contains(initialBackend)
+            ? initialBackend
+            : BackendOption.onboardingDefault
         _selectedBackend = State(initialValue: sanitizedInitialBackend)
         _selectedCohereLanguage = State(initialValue: initialCohereLanguage)
         _selectedHotkey = State(initialValue: initialHotkey)
@@ -697,7 +707,7 @@ struct OnboardingView: View {
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Start with a fast local model.\nLarger models are available after setup.")
+                Text(onboardingModelDescription)
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -706,7 +716,7 @@ struct OnboardingView: View {
 
             ScrollView {
                 VStack(spacing: MuesliTheme.spacing8) {
-                    modelCard(option: .parakeetMultilingual)
+                    modelCard(option: BackendOption.onboardingDefault)
 
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -825,7 +835,7 @@ struct OnboardingView: View {
                         Text(option.label)
                             .font(MuesliTheme.headline())
                             .foregroundStyle(MuesliTheme.textPrimary)
-                        if option.recommended {
+                        if option == BackendOption.onboardingDefault {
                             Text("Recommended")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.white)
@@ -1690,13 +1700,84 @@ struct OnboardingView: View {
                             .foregroundStyle(MuesliTheme.success)
                     }
                 }
-            } else {
-                if summaryBackend == .openRouter {
-                    Text("OpenRouter supports many model providers through one API key.")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                }
+            } else if summaryBackend == .openRouter {
+                Text("Connect OpenRouter in your browser. Muesli receives a dedicated API key after you approve access.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .multilineTextAlignment(.center)
 
+                if appState.isOpenRouterAuthenticated || openRouterSignInDone {
+                    HStack(spacing: 6) {
+                        Image(systemName: "network")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("OpenRouter connected")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(MuesliTheme.success)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                } else if isSigningInOpenRouter {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Connecting...")
+                            .font(.system(size: 12))
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                    }
+                } else {
+                    Button {
+                        isSigningInOpenRouter = true
+                        openRouterSignInError = nil
+                        apiKey = ""
+                        isEnteringOpenRouterAPIKey = false
+                        Task {
+                            let error = await controller.signInWithOpenRouter()
+                            isSigningInOpenRouter = false
+                            openRouterSignInDone = OpenRouterAuthManager.shared.isAuthenticated
+                            openRouterSignInError = error
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "network")
+                                .font(.system(size: 13, weight: .semibold))
+                            Text("Connect OpenRouter")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(MuesliTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(isEnteringOpenRouterAPIKey ? "Cancel manual key" : "Enter API key manually") {
+                        isEnteringOpenRouterAPIKey.toggle()
+                        apiKey = ""
+                        openRouterSignInError = nil
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11))
+
+                    if isEnteringOpenRouterAPIKey {
+                        PastableSecureField(
+                            text: apiKey,
+                            placeholder: "sk-or-...",
+                            onChange: { apiKey = $0 }
+                        )
+                        .frame(width: 320, height: 28)
+                    }
+
+                    if let openRouterSignInError {
+                        Text(openRouterSignInError)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    }
+                }
+            } else {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                     Text("API Key")
                         .font(MuesliTheme.caption())
@@ -1704,7 +1785,7 @@ struct OnboardingView: View {
 
                     PastableSecureField(
                         text: apiKey,
-                        placeholder: summaryBackend == .openAI ? "sk-..." : "sk-or-...",
+                        placeholder: "sk-...",
                         onChange: { apiKey = $0 }
                     )
                     .frame(width: 320, height: 28)
@@ -2029,7 +2110,7 @@ struct OnboardingView: View {
     private func cancelModelDownload(for backend: BackendOption?) {
         guard let backend else { return }
         Task {
-            await ModelDownloadCoordinator.shared.cancel(modelID: backend.model)
+            await ManagedASRModelDownloader.cancel(modelID: backend.model)
         }
     }
 

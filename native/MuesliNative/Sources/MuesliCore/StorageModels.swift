@@ -139,6 +139,23 @@ public struct LiveTranscriptCheckpointEntry: Sendable, Equatable {
     }
 }
 
+public struct DictationTargetApplication: Identifiable, Hashable, Sendable {
+    public let name: String
+    public let bundleID: String?
+
+    public init(name: String, bundleID: String?) {
+        self.name = name
+        self.bundleID = bundleID
+    }
+
+    public var id: String {
+        if let bundleID, !bundleID.isEmpty {
+            return "bundle:\(bundleID)"
+        }
+        return "name:\(name.lowercased())"
+    }
+}
+
 public struct DictationRecord: Identifiable, Codable, Sendable {
     public let id: Int64
     public let timestamp: String
@@ -147,6 +164,8 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
     public let appContext: String
     public let wordCount: Int
     public let source: String
+    public let targetAppName: String?
+    public let targetAppBundleID: String?
     public let computerUseTrace: ComputerUseTraceRecord?
 
     public init(
@@ -157,6 +176,8 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         appContext: String,
         wordCount: Int,
         source: String = "dictation",
+        targetAppName: String? = nil,
+        targetAppBundleID: String? = nil,
         computerUseTrace: ComputerUseTraceRecord? = nil
     ) {
         self.id = id
@@ -166,7 +187,32 @@ public struct DictationRecord: Identifiable, Codable, Sendable {
         self.appContext = appContext
         self.wordCount = wordCount
         self.source = source
+        self.targetAppName = targetAppName
+        self.targetAppBundleID = targetAppBundleID
         self.computerUseTrace = computerUseTrace
+    }
+}
+
+public enum TimelineEntry: Identifiable, Sendable {
+    case dictation(DictationRecord)
+    case meeting(MeetingRecord)
+
+    public var id: String {
+        switch self {
+        case .dictation(let record):
+            return "dictation:\(record.id)"
+        case .meeting(let record):
+            return "meeting:\(record.id)"
+        }
+    }
+
+    public var timestamp: String {
+        switch self {
+        case .dictation(let record):
+            return record.timestamp
+        case .meeting(let record):
+            return record.startTime
+        }
     }
 }
 
@@ -293,6 +339,9 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     /// Stable sync identity for the predecessor. Local row ids differ across
     /// devices, so sync uses the predecessor's cloud record name.
     public let followUpToRecordName: String?
+    /// Aggregated on-screen context (app text + OCR) captured during the
+    /// meeting; nil when screen context was disabled or nothing was captured.
+    public let visualContext: String?
 
     public init(
         id: Int64,
@@ -316,7 +365,8 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         selectedTemplatePrompt: String? = nil,
         source: MeetingSource = .meeting,
         followUpToID: Int64? = nil,
-        followUpToRecordName: String? = nil
+        followUpToRecordName: String? = nil,
+        visualContext: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -340,6 +390,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         self.source = source
         self.followUpToID = followUpToID
         self.followUpToRecordName = followUpToRecordName
+        self.visualContext = visualContext
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -365,6 +416,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         case source
         case followUpToID
         case followUpToRecordName
+        case visualContext
     }
 
     public init(from decoder: Decoder) throws {
@@ -391,7 +443,8 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             selectedTemplatePrompt: try c.decodeIfPresent(String.self, forKey: .selectedTemplatePrompt),
             source: (try? c.decode(MeetingSource.self, forKey: .source)) ?? .meeting,
             followUpToID: try c.decodeIfPresent(Int64.self, forKey: .followUpToID),
-            followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName)
+            followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName),
+            visualContext: try c.decodeIfPresent(String.self, forKey: .visualContext)
         )
     }
 
@@ -417,6 +470,48 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
 
     public var appliedTemplateKind: MeetingTemplateKind {
         selectedTemplateKind ?? .auto
+    }
+}
+
+public struct MeetingParticipant: Identifiable, Equatable, Sendable {
+    public let meetingID: Int64
+    public let participantIdentifier: String
+    public let displayName: String
+    public let emailAddress: String?
+    public let insertionOrder: Int
+
+    public var id: String {
+        "\(meetingID):\(participantIdentifier)"
+    }
+
+    public init(
+        meetingID: Int64,
+        participantIdentifier: String,
+        displayName: String,
+        emailAddress: String? = nil,
+        insertionOrder: Int
+    ) {
+        self.meetingID = meetingID
+        self.participantIdentifier = participantIdentifier
+        self.displayName = displayName
+        self.emailAddress = emailAddress
+        self.insertionOrder = insertionOrder
+    }
+}
+
+public struct MeetingParticipantDraft: Equatable, Sendable {
+    public let participantIdentifier: String
+    public let displayName: String
+    public let emailAddress: String?
+
+    public init(
+        participantIdentifier: String,
+        displayName: String,
+        emailAddress: String? = nil
+    ) {
+        self.participantIdentifier = participantIdentifier
+        self.displayName = displayName
+        self.emailAddress = emailAddress
     }
 }
 

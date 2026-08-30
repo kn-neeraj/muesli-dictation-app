@@ -3,6 +3,51 @@ import EventKit
 import Foundation
 import MuesliCore
 
+/// A local attendee snapshot sourced exclusively from EventKit. Direct Google
+/// API events retain the default empty attendee list.
+struct CalendarAttendee: Identifiable, Equatable, Sendable {
+    let id: String
+    let displayName: String
+    let emailAddress: String?
+
+    init?(identifier: String?, displayName: String?, emailAddress: String?) {
+        let normalizedEmail = Self.normalizedEmail(emailAddress ?? identifier)
+        let normalizedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let fallbackIdentifier = identifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolvedName = normalizedName.isEmpty ? (normalizedEmail ?? "") : normalizedName
+        guard !resolvedName.isEmpty else { return nil }
+
+        let identity = normalizedEmail.map { "email:\($0)" }
+            ?? (fallbackIdentifier.isEmpty ? nil : "calendar:\(fallbackIdentifier.lowercased())")
+        guard let identity else { return nil }
+        self.id = identity
+        self.displayName = resolvedName
+        self.emailAddress = normalizedEmail
+    }
+
+    var participantDraft: MeetingParticipantDraft {
+        MeetingParticipantDraft(
+            participantIdentifier: id,
+            displayName: displayName,
+            emailAddress: emailAddress
+        )
+    }
+
+    static func deduplicated(_ attendees: [CalendarAttendee]) -> [CalendarAttendee] {
+        var seen = Set<String>()
+        return attendees.filter { seen.insert($0.id).inserted }
+    }
+
+    private static func normalizedEmail(_ candidate: String?) -> String? {
+        var value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if value.lowercased().hasPrefix("mailto:") {
+            value.removeFirst("mailto:".count)
+        }
+        guard value.contains("@") else { return nil }
+        return value.lowercased()
+    }
+}
+
 struct UpcomingMeetingEvent {
     let id: String
     let title: String
@@ -14,7 +59,7 @@ struct UpcomingMeetingEvent {
 /// A calendar exposed by EventKit (iCloud, On-My-Mac, Exchange, an Internet
 /// Account–linked Google calendar, etc.). Used by Settings to show which
 /// calendars Muesli is reading from and to drive per-calendar enable/disable.
-struct AvailableCalendar: Identifiable, Equatable {
+struct AvailableCalendar: Identifiable, Equatable, Sendable {
     let id: String           // EKCalendar.calendarIdentifier
     let title: String
     let sourceTitle: String  // e.g. "iCloud", "spencer@dockstreet.com"
@@ -144,7 +189,12 @@ final class CalendarMonitor {
             guard let startDate = event.startDate, let endDate = event.endDate else { continue }
             let ctx = CalendarEventContext(
                 id: event.eventIdentifier ?? UUID().uuidString,
-                title: event.title ?? "Meeting"
+                title: event.title ?? "Meeting",
+                calendarOccurrence: Self.occurrenceReference(
+                    for: event,
+                    eventID: event.eventIdentifier ?? "",
+                    startDate: startDate
+                )
             )
             // Currently active — return immediately
             if startDate <= now && endDate > now {
@@ -191,7 +241,8 @@ final class CalendarMonitor {
                     eventID: eventID,
                     startDate: startDate
                 ),
-                meetingURL: Self.extractMeetingURL(from: event)
+                meetingURL: Self.extractMeetingURL(from: event),
+                attendees: Self.attendees(from: event)
             )
         }
         return UnifiedCalendarEvent
@@ -219,11 +270,52 @@ final class CalendarMonitor {
         )
     }
 
+    private static func attendees(from event: EKEvent) -> [CalendarAttendee] {
+        let participants = [event.organizer].compactMap { $0 } + (event.attendees ?? [])
+        let attendees = participants.compactMap { participant -> CalendarAttendee? in
+            guard participant.participantType != .resource,
+                  participant.participantType != .room else { return nil }
+            return CalendarAttendee(
+                identifier: participant.url.absoluteString,
+                displayName: participant.name,
+                emailAddress: participant.url.absoluteString
+            )
+        }
+        return CalendarAttendee.deduplicated(attendees)
+    }
+
+    /// Resolves participants at the persistence boundary so recording entry
+    /// points only need to carry the existing occurrence identity.
+    static func attendees(for occurrence: CalendarOccurrenceReference) -> [CalendarAttendee] {
+        guard occurrence.provider == .eventKit else { return [] }
+
+        let freshStore = EKEventStore()
+        if let event = freshStore.event(withIdentifier: occurrence.eventID) {
+            return Self.attendees(from: event)
+        }
+
+        let start = occurrence.originalStartTime.addingTimeInterval(-60)
+        let end = occurrence.originalStartTime.addingTimeInterval(60)
+        let predicate = freshStore.predicateForEvents(withStart: start, end: end, calendars: nil)
+        guard let event = freshStore.events(matching: predicate).first(where: {
+            Self.occurrenceReference(
+                for: $0,
+                eventID: $0.eventIdentifier ?? "",
+                startDate: $0.startDate
+            ).identityKey == occurrence.identityKey
+        }) else {
+            return []
+        }
+        return Self.attendees(from: event)
+    }
+
     /// Enumerate every event calendar EventKit exposes — iCloud, On-My-Mac,
     /// Exchange, and any Google account linked via System Settings > Internet
     /// Accounts. Used by Settings to surface which calendars Muesli is reading
     /// from and to power per-calendar enable/disable.
-    func availableCalendars() -> [AvailableCalendar] {
+    /// Produces a value-only snapshot so EventKit objects never cross the
+    /// background boundary used by Settings and calendar-monitor refreshes.
+    static func availableCalendars() -> [AvailableCalendar] {
         let freshStore = EKEventStore()
         return freshStore.calendars(for: .event)
             .map { cal in
@@ -272,6 +364,7 @@ final class CalendarMonitor {
             "https://[a-z0-9.-]*webex\\.com/[^\\s\"<>]+/j\\.php[^\\s\"<>]*",
             "https://[a-z0-9.-]*chime\\.aws/[^\\s\"<>]+",
             "https://facetime\\.apple\\.com/join[^\\s\"<>]*",
+            "https://app\\.slack\\.com/huddle/[A-Z0-9]+/[A-Z0-9]+[^\\s\"<>]*",
         ]
         return try? NSRegularExpression(pattern: "(\(patterns.joined(separator: "|")))", options: .caseInsensitive)
     }()
@@ -297,6 +390,10 @@ final class CalendarMonitor {
 
     private static func isMeetingURL(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
+        // Slack: only huddle URLs are meetings; app.slack.com/client/... etc. are not.
+        if host == "app.slack.com" {
+            return url.path.hasPrefix("/huddle/")
+        }
         let meetingHosts = ["zoom.us", "meet.google.com", "teams.microsoft.com", "webex.com", "chime.aws", "facetime.apple.com"]
         return meetingHosts.contains(where: { host.hasSuffix($0) })
     }

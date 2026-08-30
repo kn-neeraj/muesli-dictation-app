@@ -16,6 +16,7 @@ struct UnifiedCalendarEvent: Identifiable, Equatable {
     var calendarID: String? = nil
     var calendarOccurrence: CalendarOccurrenceReference? = nil
     var meetingURL: URL? = nil
+    var attendees: [CalendarAttendee] = []
 
     enum CalendarSource: String {
         case eventKit
@@ -519,6 +520,16 @@ final class GoogleCalendarClient {
                         return url
                     }
                 }
+            }
+            // Non-Google meeting links (Slack huddles, Zoom, ...) usually live in
+            // the event description or location rather than conferenceData.
+            if let description = item["description"] as? String,
+               let url = CalendarMonitor.findMeetingURL(in: description) {
+                return url
+            }
+            if let location = item["location"] as? String,
+               let url = CalendarMonitor.findMeetingURL(in: location) {
+                return url
             }
             return nil
         }()

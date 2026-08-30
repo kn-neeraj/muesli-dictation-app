@@ -22,10 +22,15 @@ case "${shard}" in
       MuesliCKSyncEngineTests
       MuesliCLITests
       ChatGPTAuthTests
+      ChatGPTResponsesTransportTests
       ChatGPTTokenStorageTests
+      OpenRouterAuthTests
+      SettingsPermissionRefreshReasonTests
       FloatingIndicatorVisibilityTests
       IndicatorFrameSizeTests
+      WindowAppearanceTests
       OpenAILogoShapeTests
+      StandardMenuShortcutTests
       MeetingChunkCollectorTests
       AppConfigTests
       CGPointCodableTests
@@ -34,11 +39,13 @@ case "${shard}" in
       CustomWordDictionaryTests
       ModelDownloadCoordinatorTests
       IndicASRBackendTests
+      ContributionMilestoneTests
     )
     ;;
   dictation-transcription)
     filters=(
       FluidAudioTranscriberTests
+      AppleSpeechAnalyzerBackendTests
       BackendCoverageTests
       FillerWordFilterTests
       JaroWinklerTests
@@ -47,10 +54,12 @@ case "${shard}" in
       DeltaPasteTests
       TranscriptAccumulationTests
       StreamingDictationControllerLifecycleTests
+      DictationAttributionPolicyTests
       NemotronDictationModePolicyTests
       Nemotron35StreamStateTests
       Nemotron35BackendMetadataTests
       Nemotron35LanguageTests
+      WhisperKitLanguageTests
       SpeechSegmentTests
       SpeechTranscriptionResultTests
       TranscriptionCoordinatorTests
@@ -59,7 +68,10 @@ case "${shard}" in
       DiarizerPreloadDiagnosticsTests
       DiarizerPreloadCoordinationTests
       PasteControllerTests
+      QuilTransformationTests
       BackendOptionTests
+      OpenAIDictationProviderTests
+      OpenRouterTranscriptionClientTests
       SummaryModelPresetTests
       HotkeyMonitorTests
       InteractiveAudioSessionOwnershipTests
@@ -75,7 +87,10 @@ case "${shard}" in
       AudioGraphExceptionBridgeTests
       DiagnosticIncidentTests
       DictationAudioRouteControllerTests
+      MeetingContactIdentityTests
       MeetingDetectorTests
+      MeetingParticipantStoreTests
+      MeetingProcessingStageTests
       MeetingRecordingWriterTests
       MeetingResumePolicyTests
       MeetingStreamingPartialSessionTests
@@ -85,6 +100,7 @@ case "${shard}" in
       MeetingSummaryClientTests
       MeetingsNavigationTests
       MeetingBrowserLogicTests
+      MeetingNotesInlineMarkdownTests
       TranscriptFormatterTests
       MeetingSummaryBackendTests
       MeetingResummarizationPolicyTests
