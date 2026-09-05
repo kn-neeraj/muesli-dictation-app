@@ -16,8 +16,10 @@ final class OpenAIHostedDictationSession: HostedDictationSession {
     private let stream: OpenAIRealtimeDictationStream
 
     let acceptsLiveAudio = true
+    let transcriptionModel: String
 
     init(configuration: OpenAIDictationConfiguration) {
+        transcriptionModel = OpenAITranscriptionClient.normalizeModel(configuration.model)
         stream = OpenAIRealtimeDictationStream(configuration: configuration)
     }
 

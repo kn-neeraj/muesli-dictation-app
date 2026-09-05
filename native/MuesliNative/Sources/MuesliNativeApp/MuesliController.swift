@@ -346,6 +346,7 @@ public final class MuesliController: NSObject {
     private let runtime: RuntimePaths
     private let configStore: ConfigStore
     private let dictationStore: DictationStore
+    private let voiceDataStore: VoiceDataStore
     private let meetingHookDispatcher: MeetingHookDispatching
     private let meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting
     private let launchAtLoginCoordinator: LaunchAtLoginCoordinator
@@ -553,6 +554,7 @@ public final class MuesliController: NSObject {
         runtime: RuntimePaths,
         dictationStore: DictationStore? = nil,
         configStore: ConfigStore = ConfigStore(),
+        voiceDataStore: VoiceDataStore? = nil,
         meetingHookDispatcher: MeetingHookDispatching = MeetingHookRunner(),
         meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting = MeetingMarkdownAutoExporter(),
         launchAtLoginManager: LaunchAtLoginManaging = SystemLaunchAtLoginManager(),
@@ -587,6 +589,10 @@ public final class MuesliController: NSObject {
         self.runtime = runtime
         self.dictationStore = dictationStore ?? DictationStore(
             databaseURL: MuesliPaths.defaultDatabaseURL(appName: AppIdentity.supportDirectoryName)
+        )
+        self.voiceDataStore = voiceDataStore ?? VoiceDataStore(
+            rootDirectory: configStore.supportDirectory()
+                .appendingPathComponent("voice-data", isDirectory: true)
         )
         self.meetingHookDispatcher = meetingHookDispatcher
         self.meetingMarkdownAutoExporter = meetingMarkdownAutoExporter
@@ -10644,6 +10650,17 @@ public final class MuesliController: NSObject {
         syncDictationRecorderWarmup(intent: .postDictation(.dictationStop))
         let isTestMode = isDictationTestMode
         let outputMode = currentDictationOutputMode
+        let openAIVoiceDataSession = hostedSession as? OpenAIHostedDictationSession
+        let shouldCollectOpenAIVoiceData = !isTestMode && openAIVoiceDataSession != nil
+        let voiceDataCaptureID = UUID()
+        let voiceDataModel = openAIVoiceDataSession?.transcriptionModel
+            ?? OpenAITranscriptionClient.defaultModel
+        let voiceDataDevice = config.dictationInputDeviceUID
+        let voiceDataStagingTask: Task<StagedVoiceDataAudio, Error>? = shouldCollectOpenAIVoiceData
+            ? Task.detached(priority: .utility) { [voiceDataStore] in
+                try await voiceDataStore.stageAudio(id: voiceDataCaptureID, from: wavURL)
+            }
+            : nil
         // Test mode always exercises the selected local model. Normal dictation
         // uses the configured provider while retaining the local selection for
         // an instant switch back.
@@ -10741,8 +10758,17 @@ public final class MuesliController: NSObject {
                 // Drop result if test was cancelled (user navigated away)
                 try Task.checkCancellation()
                 guard isTestMode || self.isCurrentDictationTranscription(id: transcriptionTaskID) else {
+                    await self.discardOpenAIVoiceDataStaging(voiceDataStagingTask)
                     return
                 }
+                await self.finishOpenAIVoiceDataCapture(
+                    stagingTask: voiceDataStagingTask,
+                    completionBackend: completionBackend,
+                    transcript: rawText,
+                    duration: duration,
+                    model: voiceDataModel,
+                    device: voiceDataDevice
+                )
                 let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
                     self.markDictationLatency("transcription_completed", trace: completionLatencyTrace)
@@ -10847,6 +10873,7 @@ public final class MuesliController: NSObject {
                 }
             } catch is CancellationError {
                 fputs("[muesli-native] test dictation cancelled\n", stderr)
+                await self.discardOpenAIVoiceDataStaging(voiceDataStagingTask)
                 guard isTestMode || self.isCurrentDictationTranscription(id: transcriptionTaskID) else {
                     return
                 }
@@ -10860,6 +10887,7 @@ public final class MuesliController: NSObject {
                 }
             } catch {
                 fputs("[muesli-native] transcription failed: \(error)\n", stderr)
+                await self.discardOpenAIVoiceDataStaging(voiceDataStagingTask)
                 guard isTestMode || self.isCurrentDictationTranscription(id: transcriptionTaskID) else {
                     return
                 }
@@ -10888,6 +10916,49 @@ public final class MuesliController: NSObject {
         } else {
             dictationTranscriptionTask = (transcriptionTaskID, task)
         }
+    }
+
+    private func finishOpenAIVoiceDataCapture(
+        stagingTask: Task<StagedVoiceDataAudio, Error>?,
+        completionBackend: String,
+        transcript: String,
+        duration: TimeInterval,
+        model: String,
+        device: String?
+    ) async {
+        guard let stagingTask else { return }
+        do {
+            let stagedAudio = try await stagingTask.value
+            guard completionBackend == "openai-realtime" else {
+                await voiceDataStore.discard(stagedAudio)
+                return
+            }
+            let timestamp = dictationLatencyTimestampFormatter.string(from: Date())
+            Task.detached(priority: .utility) { [voiceDataStore] in
+                do {
+                    try await voiceDataStore.commitOpenAIEntry(
+                        stagedAudio: stagedAudio,
+                        transcript: transcript,
+                        durationSeconds: duration,
+                        model: model,
+                        timestamp: timestamp,
+                        device: device
+                    )
+                } catch {
+                    await voiceDataStore.discard(stagedAudio)
+                    fputs("[voice-data] failed to preserve OpenAI dictation: \(error)\n", stderr)
+                }
+            }
+        } catch {
+            fputs("[voice-data] failed to preserve OpenAI dictation: \(error)\n", stderr)
+        }
+    }
+
+    private func discardOpenAIVoiceDataStaging(
+        _ stagingTask: Task<StagedVoiceDataAudio, Error>?
+    ) async {
+        guard let stagingTask, let stagedAudio = try? await stagingTask.value else { return }
+        await voiceDataStore.discard(stagedAudio)
     }
 
     private func userFacingDictationTestError(_ error: Error) -> String {

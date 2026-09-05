@@ -19,6 +19,8 @@ struct MuesliCLITests {
         #expect(names.contains("meetings update-notes"))
         #expect(names.contains("dictations list"))
         #expect(names.contains("dictations get"))
+        #expect(names.contains("voice-data stats"))
+        #expect(names.contains("voice-data export"))
 
         let transcribeSpec = payload.commands.first { $0.name == "transcribe" }
         #expect(transcribeSpec?.usage.contains("nemotron35") == true)
@@ -29,6 +31,16 @@ struct MuesliCLITests {
                 "CLI spec does not advertise \(model.rawValue)"
             )
         }
+    }
+
+    @Test("voice data path defaults inside support directory and accepts an override")
+    func voiceDataPathResolution() {
+        let context = CLIContext(dbPath: nil, supportDir: "/tmp/muesli-support")
+        var defaults = VoiceDataOptions()
+        #expect(defaults.rootDirectory(context: context).path == "/tmp/muesli-support/voice-data")
+
+        defaults.voiceDataDir = "~/custom-muesli-voice-data"
+        #expect(defaults.rootDirectory(context: context).path.hasSuffix("/custom-muesli-voice-data"))
     }
 
     @Test("explicit db path overrides support directory resolution")

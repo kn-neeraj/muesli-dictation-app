@@ -329,7 +329,7 @@ struct MuesliCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "muesli-cli",
         abstract: "Agent-friendly CLI for local Muesli meetings and dictations.",
-        subcommands: [SpecCommand.self, InfoCommand.self, TranscribeCommand.self, MeetingsCommand.self, DictationsCommand.self]
+        subcommands: [SpecCommand.self, InfoCommand.self, TranscribeCommand.self, MeetingsCommand.self, DictationsCommand.self, VoiceDataCommand.self]
     )
 
     static func exit(withError error: Error? = nil) -> Never {
@@ -375,6 +375,8 @@ struct MuesliCLI: AsyncParsableCommand {
             .init(name: "meetings update-notes", usage: "muesli-cli meetings update-notes <id> (--stdin | --file <path>)", summary: "Replace stored meeting notes only.", examples: ["muesli-cli meetings update-notes 42 --file notes.md", "cat notes.md | muesli-cli meetings update-notes 42 --stdin"]),
             .init(name: "dictations list", usage: "muesli-cli dictations list [--limit <n>]", summary: "List recent dictations.", examples: ["muesli-cli dictations list --limit 10"]),
             .init(name: "dictations get", usage: "muesli-cli dictations get <id>", summary: "Return a full dictation record.", examples: ["muesli-cli dictations get 7"]),
+            .init(name: "voice-data stats", usage: "muesli-cli voice-data stats [--voice-data-dir <path>]", summary: "Report collected OpenAI voice-data volume.", examples: ["muesli-cli voice-data stats"]),
+            .init(name: "voice-data export", usage: "muesli-cli voice-data export <output-directory> [--voice-data-dir <path>]", summary: "Export WAV and transcript pairs for fine-tuning.", examples: ["muesli-cli voice-data export ~/Desktop/muesli-training-data"]),
         ])
     }
 }
